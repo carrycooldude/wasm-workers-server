@@ -12,8 +12,13 @@ doctest = false
 [dependencies]
 wws-config = { workspace = true }
 wws-store = { workspace = true }
-wws-runtimes-manager = { workspace = true }
+wws-project = { workspace = true }
 wws-worker = { workspace = true }
 lazy_static = "1.4.0"
 regex = "1"
-wax = "0.5.0"
+
+# This commit fixes an issue with Walk::not, and is not yet released
+wax = { git = "https://github.com/olson-sean-k/wax.git", rev = "6d66a10" }
+
+[dev-dependencies]
+path-slash = "0.2.1"

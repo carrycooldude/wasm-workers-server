@@ -26,7 +26,26 @@ jobs:
       run: cargo fmt --check
     - name: Clippy
       run: cargo clippy -- -D warnings
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Caching
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Install deny
+      run: cargo install --locked cargo-deny
+    - name: Run
+      run: cargo deny check
   build:
+    name: Build and test
+    env:
+      E2E_MAX_WAITING_TIME: 60
     strategy:
       fail-fast: false
       matrix:
@@ -48,7 +67,6 @@ jobs:
       working-directory: ./examples
       run: make all
     - name: Build wws on release mode
-      if: steps.check_file_release.outputs.files_exists != 'true'
       run: cargo build --verbose --release
     - name: Test
       run: cargo test --workspace --exclude wasm-workers-quick-js-engine -- --show-output

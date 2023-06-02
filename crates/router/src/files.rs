@@ -1,78 +1,75 @@
-// Copyright 2022 VMware, Inc.
+// Copyright 2023 VMware, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ffi::OsStr;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use wax::{Glob, WalkEntry};
-use wws_config::Config;
-use wws_runtimes_manager::check_runtime;
 use wws_store::STORE_FOLDER;
 
-pub const IGNORE_PATH_PREFIX: &str = "_";
+const IGNORE_PATH_PREFIX: &str = "_";
 
 /// Manages the files associated to a Wasm Workers Run.
 /// It uses glob patterns to detect the workers and
 /// provide utilities to work with public folders and
 /// other related resources.
-pub struct Files {
+pub struct Files<'t> {
     /// Root path
     root: PathBuf,
-    /// Available extensions based on the config
-    extensions: Vec<String>,
-    /// Check if the public folder exists
-    has_public: bool,
+    /// Defines pattern for files considered as workers
+    include_pattern: Glob<'t>,
+    /// Defines patterns to exclude when traversing for workers
+    ignore_patterns: Vec<Glob<'t>>,
 }
 
-impl Files {
+impl<'t> Files<'t> {
+    const PUBLIC_ASSETS_FOLDER: &str = "public";
+    const DEFAULT_EXTENSIONS: [&str; 2] = ["js", "wasm"];
+
     /// Initializes a new files instance. It will detect
     /// relevant resources for WWS like the public folder.
-    pub fn new(root: &Path, config: &Config) -> Self {
-        let mut extensions = vec![String::from("js"), String::from("wasm")];
-
-        for repo in &config.repositories {
-            for runtime in &repo.runtimes {
-                for ext in &runtime.extensions {
-                    if check_runtime(root, &repo.name, runtime) && !extensions.contains(ext) {
-                        extensions.push(ext.clone());
-                    }
-                }
-            }
-        }
-
+    pub fn new(root: &Path, file_extensions: Vec<String>, ignore_patterns: Vec<String>) -> Self {
         Self {
             root: root.to_path_buf(),
-            extensions,
-            has_public: root.join(Path::new("public")).exists(),
+            include_pattern: Self::build_include_pattern(file_extensions),
+            ignore_patterns: Self::build_ignore_patterns(ignore_patterns),
         }
     }
 
     /// Walk through all the different files associated to this
     /// project using a Glob pattern
     pub fn walk(&self) -> Vec<WalkEntry> {
-        let glob_pattern = format!("**/*.{{{}}}", self.extensions.join(","));
-        let glob =
-            Glob::new(&glob_pattern).expect("Failed to read the files in the current directory");
-
-        glob.walk(&self.root)
-            .filter_map(|el| match el {
-                Ok(entry) if !self.should_ignore(entry.path()) => Some(entry),
-                _ => None,
-            })
-            .collect()
+        return self
+            .include_pattern
+            .walk(&self.root)
+            .not(self.ignore_patterns.clone())
+            .expect("Failed to walk the tree when processing files in the current directory")
+            .map(|e| e.unwrap())
+            .collect();
     }
 
-    /// Perform multiple checks to confirm if the given file should be ignored.
-    /// The current checks are: file is not inside the public or .wws folder, and
-    /// any component starts with _.
-    fn should_ignore(&self, path: &Path) -> bool {
-        path.components().any(|c| match c {
-            Component::Normal(os_str) => {
-                (self.has_public && os_str == OsStr::new("public"))
-                    || os_str == OsStr::new(STORE_FOLDER)
-                    || os_str.to_string_lossy().starts_with(IGNORE_PATH_PREFIX)
-            }
-            _ => false,
-        })
+    fn build_include_pattern(file_extensions: Vec<String>) -> Glob<'t> {
+        let mut file_extensions = file_extensions;
+        for default_extension in Self::DEFAULT_EXTENSIONS {
+            file_extensions.push(default_extension.to_string());
+        }
+
+        let include_pattern = format!("**/*.{{{}}}", file_extensions.join(","));
+        Glob::from_str(include_pattern.as_str()).expect("Failed to parse include pattern!")
+    }
+
+    fn build_ignore_patterns(ignore_patterns: Vec<String>) -> Vec<Glob<'t>> {
+        let default_ignore_patterns = vec![
+            format!("**/{}/**", Self::PUBLIC_ASSETS_FOLDER),
+            format!("**/{}/**", STORE_FOLDER),
+            format!("**/{}*/**", IGNORE_PATH_PREFIX),
+        ];
+
+        let mut result = default_ignore_patterns;
+        result.extend(ignore_patterns);
+        result
+            .iter()
+            .map(|s| Glob::from_str(s.as_str()).expect("Failed to parse ignore pattern"))
+            .collect()
     }
 }
 
@@ -80,47 +77,129 @@ impl Files {
 mod tests {
     use super::*;
 
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn unix_is_in_public_folder() {
-        let tests = [
-            ("public/index.js", true),
-            ("examples/public/index.js", true),
-            ("examples/public/other.js", true),
-            ("public.js", false),
-            ("examples/public.js", false),
-            ("./examples/public.js", false),
-            ("./examples/index.js", false),
-        ];
+    use path_slash::PathBufExt as _;
+    use std::collections::HashSet;
 
-        for t in tests {
-            let config = Config::default();
-            assert_eq!(
-                Files::new(Path::new("../../tests/data"), &config).should_ignore(Path::new(t.0)),
-                t.1
-            )
+    #[test]
+    fn walk_default() {
+        let files = Files::new(Path::new("tests/data/files"), vec![], vec![]);
+
+        let mut expected = HashSet::new();
+        expected.insert(PathBuf::from_slash("tests/data/files/examples.js"));
+        expected.insert(PathBuf::from_slash("tests/data/files/index.js"));
+        expected.insert(PathBuf::from_slash("tests/data/files/public.js"));
+        expected.insert(PathBuf::from_slash("tests/data/files/examples/public.js"));
+        expected.insert(PathBuf::from_slash(
+            "tests/data/files/examples/index/index.js",
+        ));
+
+        let mut actual = HashSet::new();
+        for entry in files.walk() {
+            actual.insert(PathBuf::from_slash(String::from(
+                entry.path().to_string_lossy(),
+            )));
         }
+
+        assert_eq!(expected, actual);
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
-    fn win_is_in_public_folder() {
-        let tests = [
-            ("public\\index.js", true),
-            ("examples\\public\\index.js", true),
-            ("examples\\public\\other.js", true),
-            ("public.js", false),
-            ("examples\\public.js", false),
-            (".\\examples\\public.js", false),
-            (".\\examples\\index.js", false),
-        ];
+    fn walk_default_subfolder() {
+        let files = Files::new(Path::new("tests/data/files/examples"), vec![], vec![]);
 
-        for t in tests {
-            let config = Config::default();
-            assert_eq!(
-                Files::new(Path::new("..\\..\\tests\\data"), &config).should_ignore(Path::new(t.0)),
-                t.1
-            )
+        let mut expected = HashSet::new();
+        expected.insert(PathBuf::from_slash("tests/data/files/examples/public.js"));
+        expected.insert(PathBuf::from_slash(
+            "tests/data/files/examples/index/index.js",
+        ));
+
+        let mut actual = HashSet::new();
+        for entry in files.walk() {
+            actual.insert(PathBuf::from_slash(String::from(
+                entry.path().to_string_lossy(),
+            )));
         }
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn walk_extensions() {
+        let files = Files::new(
+            Path::new("tests/data/files"),
+            vec!["ext".to_string()],
+            vec![],
+        );
+
+        let mut expected = HashSet::new();
+        expected.insert(PathBuf::from_slash("tests/data/files/examples.js"));
+        expected.insert(PathBuf::from_slash("tests/data/files/home.ext"));
+        expected.insert(PathBuf::from_slash("tests/data/files/index.js"));
+        expected.insert(PathBuf::from_slash("tests/data/files/public.js"));
+        expected.insert(PathBuf::from_slash("tests/data/files/examples/home.ext"));
+        expected.insert(PathBuf::from_slash("tests/data/files/examples/public.js"));
+        expected.insert(PathBuf::from_slash(
+            "tests/data/files/examples/index/home.ext",
+        ));
+        expected.insert(PathBuf::from_slash(
+            "tests/data/files/examples/index/index.js",
+        ));
+
+        let mut actual = HashSet::new();
+        for entry in files.walk() {
+            actual.insert(PathBuf::from_slash(String::from(
+                entry.path().to_string_lossy(),
+            )));
+        }
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn walk_ignore() {
+        let files = Files::new(
+            Path::new("tests/data/files"),
+            vec![],
+            vec!["**/examples/**".to_string()],
+        );
+
+        let mut expected = HashSet::new();
+        expected.insert(PathBuf::from_slash("tests/data/files/examples.js"));
+        expected.insert(PathBuf::from_slash("tests/data/files/index.js"));
+        expected.insert(PathBuf::from_slash("tests/data/files/public.js"));
+
+        let mut actual = HashSet::new();
+        for entry in files.walk() {
+            actual.insert(PathBuf::from_slash(String::from(
+                entry.path().to_string_lossy(),
+            )));
+        }
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn walk_ignore_multiple_patterns() {
+        let files = Files::new(
+            Path::new("tests/data/files"),
+            vec!["ext".to_string(), "none".to_string()],
+            vec!["**/index/**".to_string(), "*/*pub*".to_string()],
+        );
+
+        let mut expected = HashSet::new();
+        expected.insert(PathBuf::from_slash("tests/data/files/examples.js"));
+        expected.insert(PathBuf::from_slash("tests/data/files/home.ext"));
+        expected.insert(PathBuf::from_slash("tests/data/files/index.js"));
+        expected.insert(PathBuf::from_slash("tests/data/files/public.js"));
+        expected.insert(PathBuf::from_slash("tests/data/files/examples/home.ext"));
+
+        let mut actual = HashSet::new();
+        for entry in files.walk() {
+            actual.insert(PathBuf::from_slash(String::from(
+                entry.path().to_string_lossy(),
+            )));
+        }
+
+        assert_eq!(expected, actual);
     }
 }

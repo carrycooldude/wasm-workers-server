@@ -7,7 +7,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use wws_runtimes_manager::{check_runtime, metadata::Runtime};
+use wws_project::{check_runtime, metadata::Runtime};
 
 /// Default repository name
 pub const DEFAULT_REPO_NAME: &str = "wasmlabs";
@@ -120,6 +120,25 @@ impl Config {
     /// Retrieve the configuration path from the project root
     fn config_path(project_root: &Path) -> PathBuf {
         project_root.join(CONFIG_FILENAME)
+    }
+
+    /// Provides a list of all file extensions handled by the runtimes
+    /// that are currently installed in `project_root`
+    pub fn get_runtime_extensions(&self, project_root: &Path) -> Vec<String> {
+        let mut extensions: Vec<String> = vec![String::from("js"), String::from("wasm")];
+
+        for repo in &self.repositories {
+            for runtime in &repo.runtimes {
+                for ext in &runtime.extensions {
+                    if check_runtime(project_root, &repo.name, runtime) && !extensions.contains(ext)
+                    {
+                        extensions.push(ext.clone());
+                    }
+                }
+            }
+        }
+
+        extensions
     }
 }
 

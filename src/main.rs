@@ -32,6 +32,10 @@ pub struct Args {
     #[arg(long, default_value = "")]
     prefix: String,
 
+    /// Patterns to ignore when looking for worker files
+    #[arg(long, default_value = "")]
+    ignore: Vec<String>,
+
     /// Manage language runtimes in your project
     #[command(subcommand)]
     commands: Option<Main>,
@@ -102,9 +106,7 @@ async fn main() -> std::io::Result<()> {
         }
 
         println!("⚙️  Loading routes from: {}", &args.path.display());
-        let routes = Routes::new(&args.path, &args.prefix, &config);
-
-        println!("🗺  Detected routes:");
+        let routes = Routes::new(&args.path, &args.prefix, args.ignore, &config);
         for route in routes.routes.iter() {
             println!(
                 "    - http://{}:{}{}\n      => {}",
