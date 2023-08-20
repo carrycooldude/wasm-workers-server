@@ -1,18 +1,23 @@
 // Copyright 2022 VMware, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+mod bindings;
 pub mod config;
+pub mod features;
 pub mod io;
 mod stdio;
 
 use actix_web::HttpRequest;
 use anyhow::{anyhow, Result};
+use bindings::http::{add_to_linker as http_add_to_linker, HttpBindings};
 use config::Config;
 use io::{WasmInput, WasmOutput};
+use sha256::digest as sha256_digest;
 use std::fs::{self, File};
 use std::path::PathBuf;
 use std::{collections::HashMap, path::Path};
 use stdio::Stdio;
+use wasi_common::WasiCtx;
 use wasmtime::{Engine, Linker, Module, Store};
 use wasmtime_wasi::{ambient_authority, Dir, WasiCtxBuilder};
 use wws_config::Config as ProjectConfig;
@@ -22,6 +27,8 @@ use wws_runtimes::{init_runtime, Runtime};
 /// This struct will process requests by preparing the environment
 /// with the runtime and running it in Wasmtime
 pub struct Worker {
+    /// Worker identifier
+    pub id: String,
     /// Wasmtime engine to run this worker
     engine: Engine,
     /// Wasm Module
@@ -34,19 +41,28 @@ pub struct Worker {
     path: PathBuf,
 }
 
+struct WorkerState {
+    pub wasi: WasiCtx,
+    pub http: HttpBindings,
+}
+
 impl Worker {
     /// Creates a new Worker
     pub fn new(project_root: &Path, path: &Path, project_config: &ProjectConfig) -> Result<Self> {
+        // Compute the identifier
+        let id = sha256_digest(project_root.join(path).to_string_lossy().as_bytes());
+
         // Load configuration
         let mut config_path = path.to_path_buf();
         config_path.set_extension("toml");
         let mut config = Config::default();
 
         if fs::metadata(&config_path).is_ok() {
-            if let Ok(c) = Config::try_from_file(config_path) {
-                config = c;
-            } else {
-                println!("Error loading the config!");
+            match Config::try_from_file(config_path) {
+                Ok(c) => config = c,
+                Err(e) => {
+                    eprintln!("Error loading the worker configuration: {}", e);
+                }
             }
         }
 
@@ -59,6 +75,7 @@ impl Worker {
         runtime.prepare()?;
 
         Ok(Self {
+            id,
             engine,
             module,
             runtime,
@@ -90,7 +107,9 @@ impl Worker {
         let stdio = Stdio::new(&input, stderr_file);
 
         let mut linker = Linker::new(&self.engine);
-        wasmtime_wasi::add_to_linker(&mut linker, |s| s)?;
+
+        http_add_to_linker(&mut linker, |s: &mut WorkerState| &mut s.http)?;
+        wasmtime_wasi::add_to_linker(&mut linker, |s: &mut WorkerState| &mut s.wasi)?;
 
         // I have to use `String` as it's required by WasiCtxBuilder
         let tuple_vars: Vec<(String, String)> =
@@ -119,7 +138,13 @@ impl Worker {
         wasi_builder = self.runtime.prepare_wasi_ctx(wasi_builder)?;
 
         let wasi = wasi_builder.build();
-        let mut store = Store::new(&self.engine, wasi);
+        let state = WorkerState {
+            wasi,
+            http: HttpBindings {
+                http_config: self.config.features.http_requests.clone(),
+            },
+        };
+        let mut store = Store::new(&self.engine, state);
 
         linker.module(&mut store, "", &self.module)?;
         linker

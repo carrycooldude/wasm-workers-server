@@ -11,7 +11,7 @@ repository = { workspace = true }
 
 # Common package definition for all crates / kits
 [workspace.package]
-version = "1.2.0"
+version = "1.4.0"
 edition = "2021"
 authors = [ "Wasm Labs <https://wasmlabs.dev>" ]
 license = "Apache-2.0"
@@ -25,7 +25,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 actix-web = { workspace = true }
-env_logger = "0.9.0"
+env_logger = "0.10.0"
 clap = { version = "4.0.10", features = ["derive"] }
 prettytable-rs = "0.10.0"
 wws-config = { workspace = true }
@@ -36,17 +36,23 @@ wws-project = { workspace = true }
 [dev-dependencies]
 reqwest = { version = "0.11", features = ["blocking"] }
 
-[target.x86_64-unknown-linux-musl.dependencies]
-openssl = { version = "=0.10.48", features = ["vendored"] }
+[features]
+default = ["all"]
+all = ["wws_config", "wws_router", "wws_server"]
+wws_config = []
+wws_router = []
+wws_server = []
 
-[target.aarch64-unknown-linux-musl.dependencies]
-openssl = { version = "=0.10.48", features = ["vendored"] }
+vendored-openssl = ["wws-project/vendored-openssl"]
 
 [workspace]
 members = [
+  "crates/api-manage",
+  "crates/api-manage-openapi",
   "crates/config",
   "crates/data-kv",
   "crates/project",
+  "crates/panel",
   "crates/router",
   "crates/runtimes",
   "crates/server",
@@ -60,6 +66,7 @@ members = [
 exclude = [
   "examples/pdf-create",
   "examples/rust-basic",
+  "examples/rust-fetch",
   "examples/rust-kv",
   "examples/rust-params"
 ]
@@ -68,8 +75,10 @@ exclude = [
 actix-web = "4"
 anyhow = "1.0.66"
 lazy_static = "1.4.0"
+reqwest = "0.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.85"
+tokio = "1.28"
 toml = "0.7.0"
 wws-config = { path = "./crates/config" }
 wws-runtimes = { path = "./crates/runtimes" }
@@ -79,6 +88,11 @@ wws-server = { path = "./crates/server" }
 wws-store = { path = "./crates/store" }
 wws-worker = { path = "./crates/worker" }
 wws-project = { path = "./crates/project" }
-wasmtime = "6.0.2"
-wasmtime-wasi = "6.0.2"
-wasi-common = "6.0.2"
+wws-panel = { path = "./crates/panel" }
+wws-api-manage = { path = "./crates/api-manage" }
+wws-api-manage-openapi = { path = "./crates/api-manage-openapi" }
+wasmtime = "10.0.1"
+wasmtime-wasi = "10.0.1"
+wasi-common = "10.0.1"
+path-slash = "0.2.1"
+openssl = { version = "=0.10.55" }
