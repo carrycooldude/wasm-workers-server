@@ -1,6 +1,9 @@
 // Copyright 2022 VMware, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+mod errors;
+use errors::Result;
+
 mod handlers;
 
 use actix_files::Files;
@@ -10,7 +13,6 @@ use actix_web::{
     web::{self, Data},
     App, HttpServer,
 };
-use anyhow::Result;
 use handlers::assets::handle_assets;
 use handlers::not_found::handle_not_found;
 use handlers::worker::handle_worker;
@@ -37,6 +39,7 @@ pub async fn serve(
     port: u16,
     panel: bool,
     stderr: Option<&Path>,
+    cors_origins: Option<Vec<String>>,
 ) -> Result<Server> {
     // Initializes the data connectors. For now, just KV
     let data = Data::new(RwLock::new(DataConnectors::default()));
@@ -46,12 +49,18 @@ pub async fn serve(
 
     // Configure stderr
     if let Some(path) = stderr {
-        let file = OpenOptions::new().read(true).write(true).open(path)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|_| errors::ServeError::InitializeServerError)?;
 
         stderr_file = Data::new(Some(file));
     } else {
         stderr_file = Data::new(None);
     }
+
+    let cors_data = Data::new(cors_origins);
 
     let server = HttpServer::new(move || {
         let mut app = App::new()
@@ -62,7 +71,8 @@ pub async fn serve(
             .app_data(Data::clone(&routes))
             .app_data(Data::clone(&data))
             .app_data(Data::clone(&root_path))
-            .app_data(Data::clone(&stderr_file));
+            .app_data(Data::clone(&stderr_file))
+            .app_data(Data::clone(&cors_data));
 
         // Configure panel
         if panel {
@@ -110,7 +120,8 @@ pub async fn serve(
 
         app
     })
-    .bind(format!("{}:{}", hostname, port))?;
+    .bind(format!("{}:{}", hostname, port))
+    .map_err(|_| errors::ServeError::InitializeServerError)?;
 
     Ok(server.run())
 }
